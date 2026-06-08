@@ -1,0 +1,15 @@
+# Normalize line endings: checked in as LF, checked out native.
+* text=auto
+
+# Treat these as text with CRLF on checkout (Windows tooling expects it).
+*.ps1   text eol=crlf
+*.cs    text eol=crlf
+*.csproj text eol=crlf
+*.sln   text eol=crlf
+
+# Binary assets — never normalize.
+*.png binary
+*.ico binary
+*.cer binary
+*.pfx binary
+*.msix binary
