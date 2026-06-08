@@ -88,7 +88,9 @@ WinBackup.sln
 │   │   ├── IBackupEngine.cs
 │   │   ├── SsdBackupEngine.cs        # Full + incremental SSD logic
 │   │   ├── ProtonBackupEngine.cs     # Incremental Proton logic
-│   │   └── BackupOrchestrator.cs     # Scheduling, retry, locking
+│   │   ├── BackupOrchestrator.cs     # Scheduling, retry, locking
+│   │   ├── FileCopyService.cs        # Stream copy + SHA-256 verify + VSS fallback
+│   │   └── FileFilterService.cs      # Exclude temp/lock files before copy
 │   ├── OneDrive/
 │   │   └── OneDriveFileEnumerator.cs # Cloud-aware enumeration + hydrate/dehydrate
 │   ├── Volume/
@@ -98,7 +100,8 @@ WinBackup.sln
 │
 ├── WinBackup.Elevated/               # Elevated helper EXE (console app)
 │   ├── Program.cs                    # Named pipe server, executes volume ops
-│   └── VolumeOperations.cs           # DeviceIoControl P/Invoke wrappers
+│   ├── VolumeOperations.cs           # DeviceIoControl P/Invoke wrappers
+│   └── VssOperations.cs              # VSS snapshot create/expose/delete
 │
 ├── WinBackup.Tests.Unit/             # xUnit unit tests
 │   ├── SsdBackupEngineTests.cs
@@ -152,6 +155,40 @@ Uses `Windows.UI.Notifications.ScheduledToastNotification` (accessible from pack
 - Toast has buttons: **"Connect now"** (launches app to foreground) and **"Remind me tomorrow"** (schedules a new toast for the next day).
 - If user dismisses without action, the app re-schedules for 3 days later up to 4 times, then logs as "overdue" and changes the tray icon to a warning state.
 - Scheduled toasts fire even when the app is not running.
+
+### Temporary File Filtering
+
+Before any file is copied, `FileFilterService.ShouldExclude(path)` is evaluated. A file is excluded if it matches any of these patterns:
+
+| Pattern | Reason |
+|---|---|
+| `~$*` | Office lock files (`~$document.docx`, `~$spreadsheet.xlsx`, etc.) |
+| `*.tmp` | Generic temp files |
+| `*.~*` | Backup/temp variants used by some editors |
+| `desktop.ini` | Windows folder metadata |
+| `thumbs.db`, `ehthumbs.db` | Windows thumbnail caches |
+| `*.lnk` (in source root only) | Shortcut files (not meaningful as backup targets) |
+
+The filter list is hard-coded defaults but extensible via a `ExcludePatterns` array in `BackupConfig` for user additions. Excluded files are logged at debug level, not shown in the UI progress.
+
+### Locked File Fallback (VSS)
+
+`FileCopyService` uses a two-attempt strategy. Fallback is only triggered by a sharing violation — not by other errors:
+
+**Attempt 1 — Normal copy:**
+Open the file with `FileShare.ReadWrite`. If this succeeds, stream-copy and SHA-256 verify as normal.
+
+**Attempt 2 — VSS snapshot (only on `ERROR_SHARING_VIOLATION`):**
+1. Main app requests a VSS snapshot of the source volume from the elevated helper via named pipe (`VssSnapshot` command).
+2. Elevated helper calls `IVssBackupComponents`: `InitializeForBackup` → `AddVolume` → `PrepareForBackup` → `DoSnapshotSet`. Returns the snapshot device path (e.g. `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1`).
+3. Main app constructs the shadow copy path (replace drive letter with snapshot device path + original relative path).
+4. Copies from shadow path to destination — file is never locked from the snapshot's perspective.
+5. SHA-256 verification runs as normal (source hash computed from shadow path).
+6. Main app signals helper to delete the snapshot (`VssDeleteSnapshot` command) when the backup session ends.
+
+**Important:** A VSS copy reflects the file's state at snapshot time — it may be slightly older than the live version (e.g. an open Word document's last auto-save). This is intentional and documented. An older consistent copy is always preferable to no copy.
+
+VSS snapshots require the "Volume Shadow Copy" Windows service to be running (it is by default on all Windows 10/11 systems). The elevated helper manages the full VSS lifecycle per backup session (one snapshot per source volume, reused for all locked files on that volume, deleted on session end).
 
 ### Proton Drive
 
@@ -264,6 +301,8 @@ All design decisions are locked:
 
 2. **MSIX distribution**: Plain MSIX download (double-click to install). Self-signed certificate generated once by the developer. On each personal machine, run one PowerShell command to trust the cert (`Import-Certificate` to the "Trusted People" store), then install the MSIX normally. No Store, no renewal fees.
 
-3. **Copy engine**: Managed `Stream`-based copy throughout (SSD full, SSD incremental, Proton). Provides real-time per-file progress in the UI. Retry-on-locked-file implemented in `FileCopyService` (configurable retry count + delay). Post-transfer SHA-256 hash verification on every file — source hash vs destination hash — before considering the file successfully backed up.
+3. **Copy engine**: Managed `Stream`-based copy throughout (SSD full, SSD incremental, Proton). Provides real-time per-file progress in the UI. Post-transfer SHA-256 hash verification on every file. Locked files (sharing violation only) fall back to VSS snapshot copy via the elevated helper — a slightly-older consistent copy is always preferred over skipping the file. Office temp files (`~$*`, `*.tmp`, etc.) are filtered before any copy attempt.
 
-4. **Install scope**: Per-user MSIX. Config and state stored in `%APPDATA%\WinBackup\`. No admin required at install time. Follows the same model as the current PowerShell scripts.
+4. **Locked file policy**: "Better an old copy than no copy." VSS fallback is only triggered by `ERROR_SHARING_VIOLATION`, not by other errors (permissions, path-not-found, etc.). Non-sharing errors still log and skip after retries.
+
+5. **Install scope**: Per-user MSIX. Config and state stored in `%APPDATA%\WinBackup\`. No admin required at install time. Follows the same model as the current PowerShell scripts.
