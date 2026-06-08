@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinBackup.Core.Abstractions;
+using WinBackup.Core.OneDrive;
 using WinBackup.Core.State;
 
 namespace WinBackup.Core.Backup;
@@ -38,12 +39,18 @@ public sealed class FileSetCopier
 {
     private readonly FileCopyService _copy;
     private readonly ILockedFileHandler? _lockedHandler;
+    private readonly IPlaceholderController _placeholders;
     private readonly ILogger _log;
 
-    public FileSetCopier(FileCopyService copy, ILockedFileHandler? lockedHandler = null, ILogger? log = null)
+    public FileSetCopier(
+        FileCopyService copy,
+        ILockedFileHandler? lockedHandler = null,
+        IPlaceholderController? placeholders = null,
+        ILogger? log = null)
     {
         _copy = copy ?? throw new ArgumentNullException(nameof(copy));
         _lockedHandler = lockedHandler;
+        _placeholders = placeholders ?? NullPlaceholderController.Instance;
         _log = log ?? NullLogger.Instance;
     }
 
@@ -72,6 +79,7 @@ public sealed class FileSetCopier
                 {
                     case FileCopyOutcome.Copied:
                         tally.Copied++;
+                        DehydrateIfCloudOnly(job, tally);
                         break;
                     case FileCopyOutcome.Excluded:
                         tally.Excluded++;
@@ -98,6 +106,26 @@ public sealed class FileSetCopier
         }
 
         return tally;
+    }
+
+    private void DehydrateIfCloudOnly(CopyJob job, CopyTally tally)
+    {
+        if (!job.Source.IsCloudOnly)
+        {
+            return;
+        }
+
+        try
+        {
+            // The file was hydrated on read during copy; return it to cloud-only to reclaim disk.
+            _placeholders.Dehydrate(job.Source.Path);
+        }
+        catch (Exception ex)
+        {
+            // Dehydration is best-effort: the backup itself succeeded, so mark partial, don't fail.
+            tally.Errors.Add($"{job.Source.Path}: copied but dehydration failed ({ex.Message})");
+            _log.LogWarning(ex, "Dehydration failed after backup: {Path}", job.Source.Path);
+        }
     }
 
     private async Task HandleLockedAsync(
