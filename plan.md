@@ -121,19 +121,21 @@ WinBackup.sln
 
 ### OneDrive Files On Demand — Two Strategies
 
-The app will support both, selectable in settings:
+Both strategies are implemented; the app selects per-file automatically based on available disk space.
 
-**Strategy A — Hydrate-Copy-Dehydrate** (default, simpler):
-1. Enumerate OneDrive folder; for each cloud-only file (`FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`), open it normally — Windows/OneDrive hydrates it on demand.
-2. Stream to backup destination.
-3. After copy, call `CfSetPinState(CF_PIN_STATE_UNPINNED)` to re-dehydrate the file.
-4. Requires enough free disk space for the largest single file being backed up (not the whole OneDrive). The app will check free space before each file and skip + warn if insufficient.
+**Strategy A — Hydrate-Copy-Dehydrate** (default):
+1. Enumerate OneDrive folder; for each cloud-only file (`FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`), check free disk space first.
+2. If sufficient space: open file normally — Windows/OneDrive hydrates it on demand.
+3. Stream to backup destination using managed `Stream`-based copy with real-time progress.
+4. Compute SHA-256 of source and destination after transfer; abort and log error if they differ.
+5. After verified copy, call `CfSetPinState(CF_PIN_STATE_UNPINNED)` to re-dehydrate the file.
 
-**Strategy B — Microsoft Graph API streaming** (zero local footprint):
-1. Authenticate via MSAL (`Microsoft.Identity.Client`), delegated user permission `Files.Read`.
-2. Enumerate via Graph API (`/me/drive/root/children`) to discover cloud-only files.
-3. Download content as a `Stream` from `/me/drive/items/{id}/content` and write directly to backup destination.
-4. No local disk use. Requires an Azure AD app registration (free) and initial user sign-in.
+**Strategy B — Microsoft Graph API streaming** (zero local footprint, automatic fallback):
+1. Used automatically when free disk space is insufficient for a given file.
+2. Authenticate via MSAL (`Microsoft.Identity.Client`), delegated permission `Files.Read`.
+3. The Azure AD app registration is **pre-bundled** in the binary — user just clicks "Sign in with Microsoft" once in Settings. Works for all personal Microsoft accounts (MSA).
+4. Download file content as a `Stream` from `/me/drive/items/{id}/content` and write directly to backup destination — no local disk footprint.
+5. SHA-256 hash of the stream is computed during write and verified against the Graph API's `file.hashes.sha256` property (returned in item metadata).
 
 The app will fall back from Strategy A to Strategy B file-by-file if free disk space is insufficient for a given file.
 
@@ -200,10 +202,11 @@ E2E tests run against a test configuration pointing to temp folders, not the rea
 | Component | Choice |
 |---|---|
 | Language | C# 12, .NET 8 |
-| UI Framework | WinUI 3 (Windows App SDK 2.x) |
-| Packaging | Single-Project MSIX |
+| UI Framework | WinUI 3 (Windows App SDK 2.1.3) |
+| Packaging | Single-Project MSIX, self-signed certificate |
 | Win32 interop | `Microsoft.Windows.CsWin32` (P/Invoke source generator) |
 | OneDrive Graph | `Microsoft.Graph` + `Microsoft.Identity.Client` (MSAL) |
+| File copy | Managed `Stream`-based with retry + SHA-256 post-verification |
 | Unit tests | xUnit + Moq |
 | E2E tests | WinAppDriver + Appium |
 | IPC (main ↔ elevated) | Named pipes with JSON messages |
@@ -222,8 +225,9 @@ E2E tests run against a test configuration pointing to temp folders, not the rea
 - Implement Settings UI (source folders, SSD label/serial, Proton path, schedule times)
 
 ### Phase 2 — Backup Engines
-- Implement `SsdBackupEngine` (full + incremental logic, robocopy equivalent via `File.Copy` streams)
-- Implement `ProtonBackupEngine` (incremental delta to sync folder)
+- Implement `SsdBackupEngine` (full + incremental logic, managed `Stream`-based copy with retry-on-locked-file, real-time progress reporting)
+- Implement post-transfer SHA-256 verification for every copied file (source hash vs destination hash)
+- Implement `ProtonBackupEngine` (incremental delta to sync folder, same copy + verify approach)
 - Implement `BackupOrchestrator` (scheduling, concurrency guard, logging)
 - Full unit test coverage for all backup logic
 
@@ -255,16 +259,18 @@ E2E tests run against a test configuration pointing to temp folders, not the rea
 - Complete unit test suite (target: >90% coverage of `WinBackup.Core`)
 - Implement E2E test suite (WinAppDriver setup + all scenarios above)
 - Manual end-to-end validation on real hardware (OneDrive, Proton, physical SSD)
-- MSIX signing setup (self-signed cert for dev; production cert or Store for distribution)
+- MSIX signing setup: generate self-signed certificate, sign the MSIX, install cert to "Trusted People" store on each target machine (one PowerShell command per machine)
 
 ---
 
-## Open Questions / Decisions Needed
+## Decisions
 
-1. **Graph API app registration**: Strategy B requires an Azure AD app registration. Should this be a pre-registered app ID bundled in the binary (with the user's tenant being their personal Microsoft account), or should advanced users supply their own? For personal OneDrive (MSA), a single app registration with `Files.Read` delegated permission works for all users.
+All design decisions are locked:
 
-2. **MSIX distribution**: Microsoft Store (auto-updates, no signing headache) vs. self-hosted `.appinstaller` file (more control) vs. plain MSIX download. Store submission requires review but enables auto-updates for free.
+1. **Graph API app registration**: Pre-bundled app ID in the binary. User clicks "Sign in with Microsoft" once in Settings — no configuration required. Works for all personal Microsoft accounts (MSA).
 
-3. **Robocopy vs managed copy**: The PowerShell version uses `robocopy` for full SSD backups. The WinUI 3 version should use managed `Stream`-based copy (with progress reporting to UI) rather than shelling out to `robocopy`. This enables real-time progress in the status window but requires re-implementing retry-on-locked-file logic that robocopy handles internally.
+2. **MSIX distribution**: Plain MSIX download (double-click to install). Self-signed certificate generated once by the developer. On each personal machine, run one PowerShell command to trust the cert (`Import-Certificate` to the "Trusted People" store), then install the MSIX normally. No Store, no renewal fees.
 
-4. **Multi-user machines**: The current PowerShell solution is per-user (installed to user session). The WinUI 3 app should follow the same model — per-user MSIX install, per-user config in `%APPDATA%`, no machine-wide service.
+3. **Copy engine**: Managed `Stream`-based copy throughout (SSD full, SSD incremental, Proton). Provides real-time per-file progress in the UI. Retry-on-locked-file implemented in `FileCopyService` (configurable retry count + delay). Post-transfer SHA-256 hash verification on every file — source hash vs destination hash — before considering the file successfully backed up.
+
+4. **Install scope**: Per-user MSIX. Config and state stored in `%APPDATA%\WinBackup\`. No admin required at install time. Follows the same model as the current PowerShell scripts.
