@@ -18,7 +18,7 @@ All core requirements are achievable. Key findings:
 | SSD volume dismount (air-gap) | ✅ Full | `DeviceIoControl` + elevated helper EXE pattern |
 | Persistent SSD reminder toasts | ✅ Full | `ScheduledToastNotification` + alarm scenario |
 | OneDrive file enumeration (no download) | ✅ Full | Check `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` attribute |
-| OneDrive pass-through (no local disk) | ⚠️ Partial | Two strategies — see OneDrive section below |
+| OneDrive cloud-only files | ✅ Full | Hydrate-copy-verify-dehydrate, one file at a time |
 | Proton Drive integration | ✅ Full | Treat Proton sync folder as local target (same as now) |
 | Unit tests | ✅ Full | xUnit against separated class library |
 | E2E UI tests | ✅ Full | WinAppDriver + Appium via UIA accessibility tree |
@@ -90,8 +90,7 @@ WinBackup.sln
 │   │   ├── ProtonBackupEngine.cs     # Incremental Proton logic
 │   │   └── BackupOrchestrator.cs     # Scheduling, retry, locking
 │   ├── OneDrive/
-│   │   ├── OneDriveFileEnumerator.cs # Cloud-aware file enumeration
-│   │   └── OneDriveStreamProvider.cs # Pass-through streaming strategy
+│   │   └── OneDriveFileEnumerator.cs # Cloud-aware enumeration + hydrate/dehydrate
 │   ├── Volume/
 │   │   └── VolumeHelper.cs           # SSD detection by label/serial
 │   └── Pipes/
@@ -119,25 +118,19 @@ WinBackup.sln
 
 ## Key Technical Decisions
 
-### OneDrive Files On Demand — Two Strategies
+### OneDrive Files On Demand
 
-Both strategies are implemented; the app selects per-file automatically based on available disk space.
+The app uses a single strategy: **Hydrate-Copy-Verify-Dehydrate**, one file at a time.
 
-**Strategy A — Hydrate-Copy-Dehydrate** (default):
-1. Enumerate OneDrive folder; for each cloud-only file (`FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`), check free disk space first.
-2. If sufficient space: open file normally — Windows/OneDrive hydrates it on demand.
-3. Stream to backup destination using managed `Stream`-based copy with real-time progress.
-4. Compute SHA-256 of source and destination after transfer; abort and log error if they differ.
-5. After verified copy, call `CfSetPinState(CF_PIN_STATE_UNPINNED)` to re-dehydrate the file.
+No Azure account, no app registration, no sign-in flow, no external dependencies. Works entirely offline (local filesystem only).
 
-**Strategy B — Microsoft Graph API streaming** (zero local footprint, automatic fallback):
-1. Used automatically when free disk space is insufficient for a given file.
-2. Authenticate via MSAL (`Microsoft.Identity.Client`), delegated permission `Files.Read`.
-3. The Azure AD app registration is **pre-bundled** in the binary — user just clicks "Sign in with Microsoft" once in Settings. Works for all personal Microsoft accounts (MSA).
-4. Download file content as a `Stream` from `/me/drive/items/{id}/content` and write directly to backup destination — no local disk footprint.
-5. SHA-256 hash of the stream is computed during write and verified against the Graph API's `file.hashes.sha256` property (returned in item metadata).
+Sequence per cloud-only file (identified by `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`):
+1. Open the file for read — Windows triggers OneDrive to hydrate (download) it into the local placeholder.
+2. Stream to backup destination using managed `Stream`-based copy with real-time per-file progress in the UI.
+3. Compute SHA-256 of source and destination; abort and log error if they differ.
+4. Call `CfSetPinState(CF_PIN_STATE_UNPINNED)` to re-dehydrate the file, restoring it to cloud-only status.
 
-The app will fall back from Strategy A to Strategy B file-by-file if free disk space is insufficient for a given file.
+**Trade-off accepted:** Backing up large cloud-only files is slow (limited by OneDrive download speed). This is fine for a personal backup tool running overnight. Disk space required = size of the single largest file being processed, not the whole OneDrive.
 
 ### SSD Volume Air-Gap
 
@@ -205,7 +198,7 @@ E2E tests run against a test configuration pointing to temp folders, not the rea
 | UI Framework | WinUI 3 (Windows App SDK 2.1.3) |
 | Packaging | Single-Project MSIX, self-signed certificate |
 | Win32 interop | `Microsoft.Windows.CsWin32` (P/Invoke source generator) |
-| OneDrive Graph | `Microsoft.Graph` + `Microsoft.Identity.Client` (MSAL) |
+| OneDrive cloud files | `CfSetPinState` via `Microsoft.Windows.CsWin32` (no Graph API) |
 | File copy | Managed `Stream`-based with retry + SHA-256 post-verification |
 | Unit tests | xUnit + Moq |
 | E2E tests | WinAppDriver + Appium |
@@ -232,10 +225,10 @@ E2E tests run against a test configuration pointing to temp folders, not the rea
 - Full unit test coverage for all backup logic
 
 ### Phase 3 — OneDrive Support
-- Implement `OneDriveFileEnumerator` (cloud attribute detection without download)
-- Implement Strategy A (hydrate-copy-dehydrate with `CfSetPinState`)
-- Implement free-space pre-check and per-file fallback to Strategy B
-- Implement Strategy B (Microsoft Graph streaming) with MSAL auth flow in Settings
+- Implement `OneDriveFileEnumerator` (enumerate with cloud attribute detection, no download triggered)
+- Implement hydrate-copy-verify-dehydrate sequence (`CfSetPinState` via CsWin32 P/Invoke)
+- Show per-file hydration progress in status UI ("Downloading from OneDrive: filename.ext…")
+- Unit tests: mock filesystem with mix of local and cloud-only files, verify dehydration called after copy
 
 ### Phase 4 — Volume Air-Gap
 - Implement `WinBackup.Elevated` helper (named pipe server, DeviceIoControl wrappers)
@@ -267,7 +260,7 @@ E2E tests run against a test configuration pointing to temp folders, not the rea
 
 All design decisions are locked:
 
-1. **Graph API app registration**: Pre-bundled app ID in the binary. User clicks "Sign in with Microsoft" once in Settings — no configuration required. Works for all personal Microsoft accounts (MSA).
+1. **OneDrive integration**: Hydrate-copy-verify-dehydrate only. No Azure AD app registration, no Microsoft Graph API, no sign-in flow. Works for personal OneDrive Family accounts with no Azure account required. Slow for large cloud-only files but acceptable for overnight runs on a private machine with sufficient free disk space.
 
 2. **MSIX distribution**: Plain MSIX download (double-click to install). Self-signed certificate generated once by the developer. On each personal machine, run one PowerShell command to trust the cert (`Import-Certificate` to the "Trusted People" store), then install the MSIX normally. No Store, no renewal fees.
 
