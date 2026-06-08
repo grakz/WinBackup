@@ -14,21 +14,21 @@ This file is used by the agentic build loop. Work through each item in order.
 - [ ] `WinBackup.Core` has no reference to any WinUI or Windows App SDK UI assembly (verified by inspecting `.csproj`)
 
 ### 1.2 Config model & service
-- [ ] `BackupConfig` model exists with fields: `SourceFolders`, `Ssd.VolumeLabel`, `Ssd.DiskSerial`, `Ssd.BackupSubdir`, `Ssd.DismountAfterBackup`, `Ssd.ConnectWaitMinutes`, `Proton.SyncFolder`, `Proton.LookbackBackups`, `Schedule.SsdDayOfMonth`, `Schedule.SsdTime`, `Schedule.ProtonTime`, `LogDir`
-- [ ] `ConfigService.Load()` reads from a path, returns defaults when file absent
-- [ ] `ConfigService.Save()` writes and `Load()` round-trips without data loss
-- [ ] Unit tests pass: `ConfigServiceTests` — load missing file, load valid file, save-then-load round-trip, malformed JSON returns default without throwing
+- [x] `BackupConfig` model exists with fields: `SourceFolders`, `Ssd.VolumeLabel`, `Ssd.DiskSerial`, `Ssd.BackupSubdir`, `Ssd.DismountAfterBackup`, `Ssd.ConnectWaitMinutes`, `Proton.SyncFolder`, `Proton.LookbackBackups`, `Schedule.SsdDayOfMonth`, `Schedule.SsdTime`, `Schedule.ProtonTime`, `LogDir`
+- [x] `ConfigService.Load()` reads from a path, returns defaults when file absent
+- [x] `ConfigService.Save()` writes and `Load()` round-trips without data loss
+- [x] Unit tests pass: `ConfigServiceTests` — load missing file, load valid file, save-then-load round-trip, malformed JSON returns default without throwing
 
 ### 1.3 State model & service
-- [ ] `BackupState` model exists with a list of `BackupRecord` entries (each has: `Target` (Ssd/Proton), `StartedAt`, `CompletedAt`, `ResultCode`, `FilescopiedCount`, `ErrorMessage`)
-- [ ] `StateService.Load()` / `StateService.Save()` round-trips correctly
-- [ ] `StateService.AddRecord()` appends a record and persists
-- [ ] `StateService.GetLastSuccessful(target)` returns the most recent record with `ResultCode == Success` for that target
-- [ ] Unit tests pass: `StateServiceTests` — empty state, add records, get-last-successful with no records, get-last-successful with mixed results, round-trip serialization
+- [x] `BackupState` model exists with a list of `BackupRecord` entries (each has: `Target` (Ssd/Proton), `StartedAt`, `CompletedAt`, `ResultCode`, `FilesCopiedCount`, `ErrorMessage`)
+- [x] `StateService.Load()` / `StateService.Save()` round-trips correctly
+- [x] `StateService.AddRecord()` appends a record and persists
+- [x] `StateService.GetLastSuccessful(target)` returns the most recent record with `ResultCode == Success` for that target
+- [x] Unit tests pass: `StateServiceTests` — empty state, add records, get-last-successful with no records, get-last-successful with mixed results, round-trip serialization
 
 ### 1.4 Incremental cutoff logic
-- [ ] `CutoffCalculator.GetProtonCutoff(state, lookbackBackups)` returns the timestamp of the Nth-most-recent successful SSD backup
-- [ ] Unit tests pass: 0 successful SSD backups → returns `null` (full copy implied); 1 SSD backup with `lookback=2` → returns that backup's timestamp; 5 SSD backups with `lookback=2` → returns 2nd-most-recent timestamp; gap of several months handled correctly
+- [x] `CutoffCalculator.GetProtonCutoff(state, lookbackBackups)` returns the timestamp of the Nth-most-recent successful SSD backup
+- [x] Unit tests pass: 0 successful SSD backups → returns `null` (full copy implied); 1 SSD backup with `lookback=2` → returns that backup's timestamp; 5 SSD backups with `lookback=2` → returns 2nd-most-recent timestamp; gap of several months handled correctly
 
 ### 1.5 Tray icon & application shell
 - [ ] App launches without a visible window; main window is hidden on startup
