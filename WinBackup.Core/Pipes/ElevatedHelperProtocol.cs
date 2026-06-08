@@ -95,11 +95,17 @@ public static class ElevatedProtocol
     }
 }
 
+/// <summary>Sends commands to the elevated helper. Abstracted so callers can be unit-tested.</summary>
+public interface IElevatedHelperClient
+{
+    Task<HelperResponse> SendCommandAsync(HelperRequest request, CancellationToken ct = default);
+}
+
 /// <summary>
 /// Client side of the helper protocol used by the main app. Writes a request and awaits the
 /// response over the supplied streams (a duplex named-pipe stream in production).
 /// </summary>
-public sealed class ElevatedHelperClient
+public sealed class ElevatedHelperClient : IElevatedHelperClient
 {
     private readonly Stream _read;
     private readonly Stream _write;

@@ -116,19 +116,19 @@ This file is used by the agentic build loop. Work through each item in order.
 - [ ] Exits cleanly on `Exit` command or pipe disconnection
 
 ### 4.2 ElevatedHelperProtocol
-- [ ] `ElevatedHelperProtocol` in `WinBackup.Core` defines request/response message types (serializable via `System.Text.Json`)
-- [ ] `ElevatedHelperClient.SendCommandAsync()` connects to the named pipe, sends a command, and returns the response
-- [ ] Unit tests pass: command serialization round-trip; response deserialization happy path and error path
+- [x] `ElevatedProtocol` in `WinBackup.Core` defines request/response message types (serializable via `System.Text.Json`, newline-framed)
+- [x] `ElevatedHelperClient.SendCommandAsync()` sends a command over the (pipe) stream and returns the response; `IElevatedHelperClient` seam for testing
+- [x] Unit tests pass: command serialization round-trip; response deserialization happy path and error path; client send/receive; empty-stream handling
 
 ### 4.3 VSS fallback copy
-- [ ] `VssOperations.cs` in the elevated helper implements: `CreateSnapshot(volumePath)` → returns shadow device path; `DeleteSnapshot(snapshotId)`
-- [ ] Uses VSS COM interfaces (`IVssBackupComponents`) via P/Invoke / COM interop: `InitializeForBackup` → `AddVolume` → `PrepareForBackup` → `DoSnapshotSet`
-- [ ] One VSS snapshot is created per source volume per backup session; the snapshot is reused for all locked files on that volume
-- [ ] Main app `FileCopyService` reconstructs the shadow path for a locked file: replaces the drive root with the snapshot device path returned by the helper
-- [ ] Copies from shadow path using normal stream copy + SHA-256 verify
-- [ ] `BackupRecord` notes VSS-copied files separately (count of `VssFallbackCount`)
-- [ ] After backup session ends, main app signals helper to delete all snapshots created during the session
-- [ ] Unit tests pass (mock VSS responses): sharing-violation file → VSS path constructed correctly; VSS copy succeeds → file counted in `VssFallbackCount`; VSS also fails → file logged as skipped, backup continues
+- [ ] `VssOperations.cs` in the elevated helper implements: `CreateSnapshot(volumePath)` → returns shadow device path; `DeleteSnapshot(snapshotId)` — **elevated EXE, real COM, deferred to app build**
+- [ ] Uses VSS COM interfaces (`IVssBackupComponents`) via P/Invoke / COM interop: `InitializeForBackup` → `AddVolume` → `PrepareForBackup` → `DoSnapshotSet` — **elevated EXE, deferred**
+- [x] One VSS snapshot is created per source volume per backup session; the snapshot is reused for all locked files on that volume (`VssCoordinator` caching, unit-tested)
+- [x] Main app reconstructs the shadow path for a locked file: replaces the drive root with the snapshot device path (`ShadowPath.Map`, unit-tested)
+- [x] Copies from shadow path using normal stream copy + SHA-256 verify (`VssLockedFileHandler`)
+- [x] `BackupRecord` notes VSS-copied files separately (count of `VssFallbackCount`)
+- [x] After backup session ends, the coordinator deletes all snapshots created during the session (`VssCoordinator.DeleteAllAsync`)
+- [x] Unit tests pass (mock helper responses): sharing-violation file → VSS path constructed correctly; VSS copy succeeds → file counted in `VssFallbackCount`; VSS also fails → file logged as skipped, backup continues
 
 ### 4.4 Integration into SsdBackupEngine and ProtonBackupEngine
 - [ ] Before backup starts: main app launches `WinBackup.Elevated.exe` via `ShellExecuteEx` with `runas`; waits up to 30 seconds for pipe connection
