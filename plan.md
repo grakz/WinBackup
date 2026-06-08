@@ -72,7 +72,9 @@ WinBackup.sln
 │   ├── MainWindow.xaml               # Tray shell window (hidden by default)
 │   ├── Views/
 │   │   ├── StatusPage.xaml
-│   │   └── SettingsPage.xaml
+│   │   ├── SettingsPage.xaml
+│   │   ├── FileHistoryPage.xaml      # File History on/off + frequency/retention controls
+│   │   └── BrowserPage.xaml          # Backup browser (unified timeline)
 │   ├── TrayIcon.cs                   # Shell_NotifyIcon P/Invoke wrapper
 │   ├── NotificationManager.cs        # Toast scheduling + handling
 │   └── Package.appxmanifest
@@ -95,6 +97,14 @@ WinBackup.sln
 │   │   └── OneDriveFileEnumerator.cs # Cloud-aware enumeration + hydrate/dehydrate
 │   ├── Volume/
 │   │   └── VolumeHelper.cs           # SSD detection by label/serial
+│   ├── FileHistory/
+│   │   ├── FileHistoryService.cs     # FhConfigMgr COM wrapper (status, on/off, frequency, retention)
+│   │   └── FileHistoryEnumerator.cs  # Enumerate FH versions for a given file/folder
+│   ├── Browser/
+│   │   ├── BackupSnapshot.cs         # Model: snapshot metadata (time, source, file count)
+│   │   ├── SnapshotIndex.cs          # Builds unified timeline from FH + SSD sources
+│   │   ├── SsdSnapshotReader.cs      # Reconstructs folder state at time T from FULL+INCR layers
+│   │   └── FileHistoryReader.cs      # Reads FH version list for a path
 │   └── Pipes/
 │       └── ElevatedHelperProtocol.cs # Named pipe message contracts
 │
@@ -189,6 +199,53 @@ Open the file with `FileShare.ReadWrite`. If this succeeds, stream-copy and SHA-
 **Important:** A VSS copy reflects the file's state at snapshot time — it may be slightly older than the live version (e.g. an open Word document's last auto-save). This is intentional and documented. An older consistent copy is always preferable to no copy.
 
 VSS snapshots require the "Volume Shadow Copy" Windows service to be running (it is by default on all Windows 10/11 systems). The elevated helper manages the full VSS lifecycle per backup session (one snapshot per source volume, reused for all locked files on that volume, deleted on session end).
+
+### Windows File History Integration
+
+Managed via the `FhConfigMgr` COM object (`fhcfg.h`), accessible as a per-user COM object — no elevation required for reading or writing settings.
+
+**Exposed controls in `FileHistoryPage`:**
+- On / Off toggle (enables or disables the File History service for this user)
+- Backup frequency: every 10 min / 15 / 20 / 30 min / 1 hr / 3 hr / 6 hr / 12 hr / daily (`FH_FREQUENCY` enum)
+- Retention: keep until space needed / 1 / 3 / 6 / 9 months / 1 / 2 years / forever (`FHLPT_RETENTION_TYPE` + `FHLPT_RETENTION_AGE`)
+- Status display: last backup time, target drive label and free space, "Back up now" button
+
+**`FileHistoryService` in `WinBackup.Core`:**
+- `GetStatus()` — returns `FileHistoryStatus` (Enabled/Disabled/NotConfigured, last backup time, drive info)
+- `SetEnabled(bool)` — starts or stops File History
+- `SetFrequency(FhFrequency)` / `GetFrequency()`
+- `SetRetention(FhRetentionType, int ageMonths)` / `GetRetention()`
+- `TriggerBackupNow()` — calls `IFhServiceComProxy.BackupFiles()`
+
+If File History has no drive configured, the page shows a "Not configured — use Windows Settings to select a backup drive" message with a button that opens `ms-settings:backup`.
+
+### Backup Browser
+
+A unified file/folder history browser that intelligently routes to the correct data source based on the requested timestamp.
+
+**Data sources and their structures:**
+
+*File History:* stores versions at `{FH_drive}\FileHistory\{user}\{PC}\Data\{volume}\{relative_path}\{name} ({timestamp}).{ext}`. Versions are available for the configured retention period (hours to years). FH drive must be connected.
+
+*SSD backups:* `YYYY_FULL\` contains the baseline; each `YYYY-MM_INCR\` layer adds files modified since the previous backup. To reconstruct folder state at time T: find newest `FULL` before T, then apply each `INCR` layer up to T in order (later layer wins on conflict).
+
+**`SnapshotIndex` — unified timeline:**
+- Scans both sources and returns a merged, sorted list of `BackupSnapshot` objects
+- Each snapshot has: `Timestamp`, `Source` (FileHistory / SsdFull / SsdIncremental), `IsAvailable` (false if drive not connected)
+- Used by the browser to populate the timeline
+
+**`BrowserPage` UI:**
+- Left panel: source folder tree (same folders as configured backup sources)
+- Centre panel: timeline of available snapshots for the selected folder, grouped by date. File History snapshots shown in blue; SSD snapshots in amber. Greyed out + tooltip "Connect SSD" when SSD unavailable.
+- Right panel: file listing for the selected snapshot — showing the reconstructed folder contents at that point in time
+- "Restore file" button: copies the selected file version to a user-chosen destination (does not overwrite in-place without confirmation)
+- "Restore folder" button: copies all files from the reconstructed snapshot to a user-chosen destination
+- When SSD is needed and not connected: a non-blocking banner appears ("Connect your SSD to access snapshots before [date]"); File History snapshots remain accessible
+
+**Routing logic (in `SnapshotIndex.GetContentsAt(folder, timestamp)`):**
+1. If `timestamp` is within File History retention window AND FH drive is connected AND FH has a version at/before that time → use `FileHistoryReader`
+2. Otherwise, if SSD is connected → use `SsdSnapshotReader` to reconstruct from FULL + INCR layers
+3. If neither is available → return empty with a `SourceUnavailable` reason
 
 ### Proton Drive
 

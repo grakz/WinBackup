@@ -33,7 +33,7 @@ This file is used by the agentic build loop. Work through each item in order.
 ### 1.5 Tray icon & application shell
 - [ ] App launches without a visible window; main window is hidden on startup
 - [ ] A tray icon appears in the notification area on launch
-- [ ] Right-click tray menu shows items: "Status", "Settings", "Run SSD backup now", "Run Proton backup now", "Open logs", "Exit"
+- [ ] Right-click tray menu shows items: "Status", "Settings", "File History", "Browse backups", "Run SSD backup now", "Run Proton backup now", "Open logs", "Exit"
 - [ ] "Exit" cleanly removes the tray icon and terminates the process
 - [ ] App registers a startup task via `Windows.ApplicationModel.StartupTask` (entry in `Package.appxmanifest`)
 - [ ] App does not appear in the taskbar while running in tray-only mode
@@ -202,6 +202,8 @@ This file is used by the agentic build loop. Work through each item in order.
 - [ ] `SettingsTests`: open settings → change source folder to a temp path → save → reopen settings → verify temp path is present
 - [ ] `StatusTests`: trigger a manual Proton backup (temp source + temp Proton folder) → status window shows "Running" → backup completes → status shows "Success" with file count > 0
 - [ ] `ToastTests`: programmatically trigger the SSD reminder logic → verify a `ScheduledToastNotification` exists in the notification queue
+- [ ] `FileHistoryTests`: open File History page → status displays without crash; toggle enabled state → status badge updates
+- [ ] `BrowserTests`: open Browse backups page → folder tree populated from config → selecting a folder loads timeline (may be empty in test env, no crash)
 - [ ] All E2E tests pass against a test config (no real user data touched)
 
 ### 7.3 MSIX packaging & signing
@@ -219,3 +221,60 @@ This file is used by the agentic build loop. Work through each item in order.
 - [ ] App runs from an existing config with no first-run prompt
 - [ ] All log files written to configured `LogDir`, rotated by date, no unbounded growth
 - [ ] Uninstall via Windows Settings → Apps removes all scheduled toasts, the startup task, and app files; config/state in `%APPDATA%\WinBackup\` is left intact (user data preserved)
+
+---
+
+## Phase 8 — Windows File History Integration
+
+### 8.1 FileHistoryService
+- [ ] `FileHistoryService` in `WinBackup.Core` wraps `FhConfigMgr` COM object via CsWin32
+- [ ] `GetStatus()` returns: `Enabled/Disabled/NotConfigured`, last backup time (or null), target drive label + free space
+- [ ] `SetEnabled(bool)` toggles File History on/off; returns `NotConfigured` error if no drive is set
+- [ ] `GetFrequency()` / `SetFrequency(FhFrequency)` reads/writes backup frequency
+- [ ] `GetRetention()` / `SetRetention(type, ageMonths)` reads/writes retention policy
+- [ ] `TriggerBackupNow()` triggers an immediate File History backup via `IFhServiceComProxy`
+- [ ] All methods degrade gracefully when File History service is absent or not configured (return status, do not throw)
+- [ ] Unit tests pass (mock COM interfaces): each getter/setter round-trips; `NotConfigured` state handled; COM failure returns error status, does not throw
+
+### 8.2 File History UI page
+- [ ] "File History" entry in tray menu opens `FileHistoryPage`
+- [ ] Page shows current status (on/off badge, last backup time, target drive + free space)
+- [ ] On/Off toggle updates immediately via `FileHistoryService.SetEnabled()`
+- [ ] Frequency dropdown shows all 9 options; changing selection calls `SetFrequency()` and shows confirmation
+- [ ] Retention dropdown shows all options; changing selection calls `SetRetention()` and shows confirmation
+- [ ] "Back up now" button calls `TriggerBackupNow()`; button is disabled while backup is in progress; shows "Last backed up: {time}" on completion
+- [ ] When status is `NotConfigured`: controls are disabled; banner reads "File History has no backup drive configured" with "Open Windows Settings" button that launches `ms-settings:backup`
+- [ ] Page reflects live status (polls every 30 seconds while open; updates on show)
+
+---
+
+## Phase 9 — Backup Browser
+
+### 9.1 SSD snapshot reader
+- [ ] `SsdSnapshotReader.ListSnapshots(sourceFolder)` returns all available `BackupSnapshot` objects for a folder: each has `Timestamp`, `Source` (`SsdFull` / `SsdIncremental`), `IsAvailable` (false if SSD not connected)
+- [ ] `SsdSnapshotReader.GetContentsAt(sourceFolder, timestamp)` reconstructs the folder's file listing at time T: starts from the most recent `YYYY_FULL` at or before T, applies each `YYYY-MM_INCR` up to T in order (later layer wins)
+- [ ] Returns only the logical file set (no duplicate paths — only the most-recent-before-T version of each file)
+- [ ] Unit tests pass: no snapshots → empty list; only full → full contents returned; full + two incrementals, T between them → correct merged set; file deleted in incr → absent from result; SSD disconnected → snapshots listed as unavailable
+
+### 9.2 File History reader
+- [ ] `FileHistoryReader.ListVersions(filePath)` returns all `BackupSnapshot` objects for a specific file from the File History archive, sorted newest-first
+- [ ] `FileHistoryReader.GetVersionPath(filePath, timestamp)` returns the physical path to the File History copy at or before the given timestamp (for direct copy/preview)
+- [ ] `FileHistoryEnumerator.ListSnapshots(sourceFolder)` returns distinct timestamps at which File History captured any change under `sourceFolder`
+- [ ] Unit tests pass: file with no FH versions → empty list; file with 3 versions → correct timestamps; `GetVersionPath` returns closest-before-T version; FH drive absent → returns empty, no exception
+
+### 9.3 Unified snapshot index
+- [ ] `SnapshotIndex.GetTimeline(sourceFolder)` merges `SsdSnapshotReader` and `FileHistoryReader` results into one sorted list, deduplicating by source
+- [ ] `SnapshotIndex.GetContentsAt(sourceFolder, timestamp)` routes to the correct reader: File History if within retention window and FH drive available; SSD otherwise
+- [ ] Returns a `SnapshotContentsResult` with: `IReadOnlyList<SnapshotFile>` (path, size, timestamp, source), `SourceUnavailableReason` (null if successful)
+- [ ] Unit tests pass: FH within retention and available → routes to FH; FH unavailable → falls back to SSD; both unavailable → returns `SourceUnavailableReason`; timeline merge produces correct chronological order
+
+### 9.4 Browser UI
+- [ ] "Browse backups" entry in tray menu opens `BrowserPage`
+- [ ] Left panel: tree of configured source folders; selecting a folder loads its timeline
+- [ ] Centre panel: timeline list of all snapshots for the selected folder, grouped by date; File History entries shown in one accent colour, SSD entries in another; unavailable entries greyed with tooltip "Connect SSD to access"
+- [ ] Right panel: file listing for the selected snapshot showing reconstructed folder contents (name, size, modified time, source badge)
+- [ ] Selecting a file enables "Restore file…" button; selecting any snapshot enables "Restore folder…" button
+- [ ] "Restore file…" opens a save-file picker pre-filled with the original filename; copies the historical version to the chosen path
+- [ ] "Restore folder…" opens a folder picker; copies all files from the snapshot to the chosen folder (does not overwrite without a confirmation dialog)
+- [ ] When SSD is required but not connected: non-blocking info banner shown; File History entries remain functional
+- [ ] When neither source is available: empty state illustration with explanation text
