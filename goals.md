@@ -51,42 +51,42 @@ This file is used by the agentic build loop. Work through each item in order.
 ## Phase 2 — Backup Engines
 
 ### 2.1 FileFilterService
-- [ ] `FileFilterService.ShouldExclude(path)` returns `true` for: `~$*` (Office lock files), `*.tmp`, `*.~*`, `desktop.ini`, `thumbs.db`, `ehthumbs.db`
-- [ ] Default exclusion patterns are supplemented by `BackupConfig.ExcludePatterns` (user-defined globs)
-- [ ] Excluded files are logged at debug level and counted separately from skipped/error files
-- [ ] Unit tests pass: each built-in pattern excluded correctly; custom pattern from config excluded; normal files not excluded; case-insensitive matching on Windows paths
+- [x] `FileFilterService.ShouldExclude(path)` returns `true` for: `~$*` (Office lock files), `*.tmp`, `*.~*`, `desktop.ini`, `thumbs.db`, `ehthumbs.db`
+- [x] Default exclusion patterns are supplemented by `BackupConfig.ExcludePatterns` (user-defined globs)
+- [x] Excluded files are logged at debug level and counted separately from skipped/error files
+- [x] Unit tests pass: each built-in pattern excluded correctly; custom pattern from config excluded; normal files not excluded; case-insensitive matching on Windows paths
 
 ### 2.2 FileCopyService
-- [ ] `FileCopyService.CopyAsync(source, dest, progress, ct)` streams source to dest, reports `IProgress<FileCopyProgress>` (bytes copied, total bytes, filename)
-- [ ] `FileFilterService.ShouldExclude()` is checked before any copy attempt; excluded files are skipped silently
-- [ ] Retry logic: retries up to 3 times with 2-second delay on `IOException` that is **not** a sharing violation; gives up and logs after max retries
-- [ ] Sharing violation (`ERROR_SHARING_VIOLATION` / `Win32Exception` with native error 32) does **not** retry — instead sets a `RequiresVssFallback = true` flag on the result and returns immediately
-- [ ] Post-copy SHA-256 verification: computes hash of source and dest after copy; throws `HashMismatchException` if they differ
-- [ ] Unit tests pass: happy path copy, filter exclusion skips file, non-sharing IOException retries then gives up, sharing violation returns `RequiresVssFallback` without retrying, hash mismatch throws, cancellation stops mid-copy cleanly
+- [x] `FileCopyService.CopyAsync(source, dest, progress, ct)` streams source to dest, reports `IProgress<FileCopyProgress>` (bytes copied, total bytes, filename)
+- [x] `FileFilterService.ShouldExclude()` is checked before any copy attempt; excluded files are skipped silently
+- [x] Retry logic: retries up to 3 times with 2-second delay on `IOException` that is **not** a sharing violation; gives up and logs after max retries
+- [x] Sharing violation (`ERROR_SHARING_VIOLATION` / `Win32Exception` with native error 32) does **not** retry — instead sets a `RequiresVssFallback = true` flag on the result and returns immediately
+- [x] Post-copy SHA-256 verification: computes hash of source and dest after copy; throws `HashMismatchException` if they differ
+- [x] Unit tests pass: happy path copy, filter exclusion skips file, non-sharing IOException retries then gives up, sharing violation returns `RequiresVssFallback` without retrying, hash mismatch throws, cancellation stops mid-copy cleanly
 
 ### 2.3 SsdBackupEngine
-- [ ] `SsdBackupEngine.RunAsync()` performs a **full** copy (all source files into `YYYY_FULL/`) when no full backup exists for the current year
-- [ ] Performs an **incremental** copy (files with `LastWriteTime > last SSD backup timestamp` into `YYYY-MM_INCR/`) when a full backup for this year already exists
-- [ ] Uses `FileCopyService` for all file copies (progress flows up to orchestrator)
-- [ ] Files returning `RequiresVssFallback` are collected and passed to the VSS fallback path (Phase 4); until Phase 4 is implemented these are logged as "pending VSS" and counted as `PartialSuccess`
-- [ ] Excluded files (from `FileFilterService`) are not copied and not counted as errors
-- [ ] Skips files that fail after retries for non-sharing errors, logs the skip, continues (does not abort the whole backup)
-- [ ] Records a `BackupRecord` via `StateService.AddRecord()` on completion (success or partial)
-- [ ] Unit tests pass (with mock filesystem + mock `FileCopyService`): first run of year → full copy; second run same year → incremental; year rollover → new full copy; excluded files skipped; mixed skip-on-error scenario
+- [x] `SsdBackupEngine.RunAsync()` performs a **full** copy (all source files into `YYYY_FULL/`) when no full backup exists for the current year
+- [x] Performs an **incremental** copy (files with `LastWriteTime > last SSD backup timestamp` into `YYYY-MM_INCR/`) when a full backup for this year already exists
+- [x] Uses `FileCopyService` for all file copies (progress flows up to orchestrator)
+- [x] Files returning `RequiresVssFallback` are collected and passed to the VSS fallback path (Phase 4); until Phase 4 is implemented these are logged as "pending VSS" and counted as `PartialSuccess`
+- [x] Excluded files (from `FileFilterService`) are not copied and not counted as errors
+- [x] Skips files that fail after retries for non-sharing errors, logs the skip, continues (does not abort the whole backup)
+- [x] Records a `BackupRecord` via `StateService.AddRecord()` on completion (success or partial)
+- [x] Unit tests pass (with mock filesystem + mock `FileCopyService`): first run of year → full copy; second run same year → incremental; year rollover → new full copy; excluded files skipped; mixed skip-on-error scenario
 
 ### 2.4 ProtonBackupEngine
-- [ ] `ProtonBackupEngine.RunAsync()` copies files modified since `CutoffCalculator.GetProtonCutoff()` into `YYYY-MM-DD/` subfolder of the Proton sync folder
-- [ ] Skips run entirely (no folder created) if no files have changed since cutoff
-- [ ] Uses `FileCopyService` for all copies; excluded files not copied; `RequiresVssFallback` files handled same as SsdBackupEngine (Phase 4 completes this)
-- [ ] Records a `BackupRecord` on completion
-- [ ] Unit tests pass: no changes since cutoff → no folder created; files changed → correct dated folder; cutoff = null → copies all source files; excluded files skipped; skip-on-error scenario
+- [x] `ProtonBackupEngine.RunAsync()` copies files modified since `CutoffCalculator.GetProtonCutoff()` into `YYYY-MM-DD/` subfolder of the Proton sync folder
+- [x] Skips run entirely (no folder created) if no files have changed since cutoff
+- [x] Uses `FileCopyService` for all copies; excluded files not copied; `RequiresVssFallback` files handled same as SsdBackupEngine (Phase 4 completes this)
+- [x] Records a `BackupRecord` on completion
+- [x] Unit tests pass: no changes since cutoff → no folder created; files changed → correct dated folder; cutoff = null → copies all source files; excluded files skipped; skip-on-error scenario
 
 ### 2.5 BackupOrchestrator
-- [ ] `BackupOrchestrator` holds a `PeriodicTimer` (or equivalent) that checks daily whether a Proton backup is due (time-of-day match) and monthly whether an SSD backup is due (day-of-month + time match)
-- [ ] Prevents concurrent runs: if a backup is already running, a second trigger is silently skipped and logged
-- [ ] Exposes `CurrentStatus` property: `Idle | RunningProton | RunningSsd | Error`
-- [ ] Exposes `Progress` event carrying `FileCopyProgress` for UI binding
-- [ ] Unit tests pass: double-trigger is a no-op; status transitions Idle → Running → Idle; timer fires at correct time window (mock clock)
+- [x] `BackupOrchestrator` holds a `PeriodicTimer` (or equivalent) that checks daily whether a Proton backup is due (time-of-day match) and monthly whether an SSD backup is due (day-of-month + time match) — pure `TickAsync` + `BackupSchedule`; the `PeriodicTimer` host loop lives in the app shell (Phase 1.5)
+- [x] Prevents concurrent runs: if a backup is already running, a second trigger is silently skipped and logged
+- [x] Exposes `CurrentStatus` property: `Idle | RunningProton | RunningSsd | Error` (named `Status`)
+- [x] Exposes `Progress` event carrying `FileCopyProgress` for UI binding (via `BackupProgress.Current`)
+- [x] Unit tests pass: double-trigger is a no-op; status transitions Idle → Running → Idle; timer fires at correct time window (mock clock)
 
 ---
 
