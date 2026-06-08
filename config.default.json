@@ -1,0 +1,23 @@
+{
+  "sourceFolders": [
+    "C:\\Users\\YOURNAME\\Documents",
+    "C:\\Users\\YOURNAME\\Pictures"
+  ],
+  "ssd": {
+    "volumeLabel": "BACKUP_SSD",
+    "diskSerial": "PUT-SERIAL-HERE",
+    "backupSubdir": "Backups",
+    "dismountAfterBackup": true,
+    "connectWaitMinutes": 30
+  },
+  "proton": {
+    "syncFolder": "C:\\Users\\YOURNAME\\Proton Drive\\My files\\Backups",
+    "lookbackBackups": 2
+  },
+  "schedule": {
+    "ssdDayOfMonth": 1,
+    "ssdTime": "18:00",
+    "protonTime": "02:00"
+  },
+  "logDir": "C:\\ProgramData\\BackupSystem\\logs"
+}
